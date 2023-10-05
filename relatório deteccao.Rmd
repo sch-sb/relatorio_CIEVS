@@ -1,0 +1,504 @@
+---
+output: 
+  officedown::rpptx_document:
+    reference_doc: relatorio.pptx
+---
+
+```{r setup, include=FALSE}
+rm(list=ls())
+if (!require(pacman)) install.packages("pacman")
+knitr::opts_chunk$set(echo = FALSE, fig.cap = TRUE)
+pacman::p_load(tidyverse, httr, readxl, data.table, officer, downloader, lubridate, sf, rnaturalearth, ISOcodes, rvg, viridis, maps, wordcloud, geobr)
+
+Sys.setlocale("LC_TIME","Portuguese")
+
+world <- map_data("world") %>%
+  rename(País = region) %>%
+  mutate(País = ifelse(País == "USA", "United States of America", 
+              ifelse(País == "Russia", "Russian Federation", 
+              ifelse(País == "Republic of Congo", "Democratic Republic of the Congo", 
+               ifelse(País == "Tanzania", "United Republic of Tanzania", 
+               ifelse(País == "Ivory Coast", "Cote D'Ivore", 
+               ifelse(País == "United Republic of Tanzania", "Tanzania", País)))))))
+
+relatorio <- read_pptx("D:/Relatorio/relatorio1.pptx") 
+  template_object_map <- relatorio %>% officer::layout_properties() %>% select(c('master_name','name', 'type', 'id', 'ph_label'))
+
+
+setwd("D:/Relatorio")
+
+
+# Leitura dos dados
+dados_port <- read_excel("C:/Users/sacha.carvalho/OneDrive - Ministério da Saúde/2023/Modelo Planilha de Detecção.xlsx", skip=1)%>%
+  drop_na(`Título do Rumor`)
+
+paises <- read_excel("D:/Relatorio/PopPaisWHO2020.xlsx") %>%
+  rename(País = tradPT) 
+
+##dados para mapa internacional
+dados <- left_join(dados_port, paises, by = "País")
+
+dados_english <- left_join(dados, paises, by = "País")
+
+world_dados <- left_join(dados_english, world, by = c("Country.x" = "País"))
+
+##dados para mapa brasil
+brasil <- read_country(year = 2020)
+
+
+# rumores por país
+rumores_por_pais <- dados_english %>%
+  group_by(País) %>% 
+  summarise(rumor_count = n()) %>%
+  drop_na()
+
+rumor <- dados %>%
+  dplyr::group_by(across(c(2, 6, 7, 8, 9, 10, 11, 44, 45, 46, 61, 72, 73, 74))) %>%
+  dplyr::summarise()
+
+# rumores por estado 
+estado <- rumor %>%
+   group_by(`UF`) %>%
+  drop_na(`UF`) %>%
+ filter(!`UF` %in% c("N/A", "UF", "n/a", "pi", "sp", "-")) %>%
+  count(`UF`)
+
+
+dados_brasil <- brasil %>% left_join(estado, by = c("abbrev_state"="UF")) 
+
+
+```
+
+## R Markdown
+
+```{r}
+##Assunto
+assunto <- rumor %>%
+   group_by(`Assunto`) %>%
+   summarise(n = n())
+
+##Assunto_internacional
+assunto_i <- rumor %>%
+  filter(`Origem` == "Internacional") %>%
+  group_by(`Assunto`) %>%
+    count()
+
+##Assunto Nacional
+assunto_n <- rumor %>%
+  filter(`Origem` == "Nacional") %>%
+  group_by(`Assunto`) %>%
+    count()
+
+##País
+local <- rumor %>%
+  select(`País`) %>%
+  drop_na(`País`) %>%
+ count(`País`) 
+
+##UF
+estado <- rumor %>%
+   group_by(`UF`) %>%
+  drop_na(`UF`) %>%
+ filter(!`UF` %in% c("N/A", "UF", "n/a", "pi", "sp", "-")) %>%
+  count()
+
+##CME
+CME <- rumor %>%
+  filter(!`UF` %in% c("CME", "N/A")) %>%
+   group_by(`...73`) %>%
+  drop_na(`...73`) %>%
+  count()
+
+##Origem - Nacional/Internacional
+origem <- rumor %>%
+  group_by(`Origem`)%>%
+  drop_na(`Origem`) %>%
+  count()
+
+##Ferramenta detecção
+ferramenta <- rumor %>%
+  group_by(`Ferramenta de Detecção`) %>%
+  drop_na(`Ferramenta de Detecção`) %>%
+  filter(`Ferramenta de Detecção` != "eios") %>%
+  count(`Ferramenta de Detecção`)
+
+#Relevancia
+relevancia_bruto <- rumor %>%
+   group_by(`...45`) %>%
+  drop_na(`...45`) %>%
+  count(`...45`)
+
+
+##Verificado em fontes oficiais
+verificado_s <- rumor %>%
+   group_by(`VERIFICADO EM FONTES OFICIAIS`) %>%
+  drop_na(`VERIFICADO EM FONTES OFICIAIS`) %>%
+   filter(`VERIFICADO EM FONTES OFICIAIS` != "Não se aplica") %>%
+  count(`VERIFICADO EM FONTES OFICIAIS`) 
+
+verificado <- verificado_s[-2, ]
+
+
+
+v_final_i <- rumor %>%
+  group_by(`VERIFICAÇÃO FINAL`) %>%
+  drop_na(`VERIFICAÇÃO FINAL`) %>%
+   filter(`VERIFICAÇÃO FINAL` %in% c("Verídico", "Não verídico")) %>%
+  count(`VERIFICAÇÃO FINAL`)
+
+##Verificação oportuna CIEVS
+
+v_oportuna <- rumor %>%
+  group_by(`...61`) %>%
+  filter(`...61` != "Não se aplica") %>%
+  count(`...61`) %>%
+  ungroup() %>%
+  mutate(porcentagem = round((n / sum(n)) * 100, 1),
+         porcentagem = paste0(porcentagem, "%"))
+
+```
+
+```{r Gráficos}
+
+
+cores <- c("#264653", "#F4A261") 
+
+ggplot(relevancia_bruto, aes(x = "", y = n, fill = `...45`)) + 
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar(theta = "y") +
+  scale_fill_manual(values = c("Não relevante" = "#264653", "Relevante" = "#EF946C")) +
+  theme_void()
+
+
+# Gráfico assunto
+
+cores_colunas <- c("#264653", "#26577C", "#F4A261")
+palette_func <- colorRampPalette(cores_colunas)
+palette <- palette_func(10)
+print(palette)
+
+
+top_assuntos <- assunto %>%
+  arrange(-n) %>%
+  head(10)
+top_assuntos$order <- 1:nrow(top_assuntos)
+top_assuntos$order <- as.factor(top_assuntos$order)
+
+g_assunto <- ggplot(top_assuntos, aes(x = reorder(`Assunto`, n), y = n, fill = order)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  scale_fill_manual(values = palette) +
+  theme_classic() +
+  labs(title = "Doenças e agravos detectados") +
+  theme(legend.position = "none",
+        plot.title = element_text(family = "Arial", face = "bold", colour = "#264653"),
+        axis.title.x = element_blank(),  
+        axis.title.y = element_blank())  
+print(g_assunto)
+
+
+#Gráfico assuntos internacionais
+
+ top_assuntos_i <- assunto_i %>%
+  arrange(-n) %>%
+  head(10)
+top_assuntos_i$order <- 1:nrow(top_assuntos_i)
+top_assuntos_i$order <- as.factor(top_assuntos_i$order)
+
+g_assunto_i <- ggplot(top_assuntos_i, aes(x = reorder(`Assunto`, n), y = n, fill = order)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  scale_fill_manual(values = palette) +
+  theme_classic() +
+  labs(title = "Agravos internacionais")+
+  theme(legend.position = "none",
+         plot.title = element_text(family = "Arial", face = "bold", colour = "#264653", hjust = 0.5),
+        axis.title.x = element_blank(),  
+        axis.title.y = element_blank())  
+
+print(g_assunto_i)
+
+#Gráfico assuntos nacional
+
+ top_assuntos_n <- assunto_n %>%
+  arrange(-n) %>%
+  head(10)
+top_assuntos_n$order <- 1:nrow(top_assuntos_n)
+top_assuntos_n$order <- as.factor(top_assuntos_n$order)
+
+g_assunto_n <- ggplot(top_assuntos_n, aes(x = reorder(`Assunto`, n), y = n, fill = order)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  scale_fill_manual(values = palette) +
+  theme_classic() +
+  labs(title = "Agravos nacionais") +
+  theme(legend.position = "none",
+        plot.title = element_text(family = "Arial", face = "bold", colour = "#264653", hjust = 0.5),
+        axis.title.x = element_blank(),  
+        axis.title.y = element_blank())  
+print(g_assunto_n)
+
+##Gráfico Origem
+origem_g <- ggplot(origem, aes(x = "", y = n, fill = `Origem`)) +
+  geom_col(width = 1) +  
+  coord_polar("y") +
+  scale_fill_manual(values = cores) +
+  theme_void() +
+  labs(title = "Origem dos rumores") +
+  theme(
+    axis.text.x = element_blank(),
+    axis.text.y = element_blank(),  
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    legend.position = "none",
+    plot.title = element_text(family = "Arial", face = "bold", colour = "#264653", hjust = 0.5),
+    panel.border = element_blank() 
+  ) +
+  geom_label(aes(label = paste(`Origem`, n, sep = ": ")), position = position_stack(vjust = 0.5), color = "white", size = 3)
+
+print(origem_g)
+
+##Gráfico relevância
+
+relevancia_g <- ggplot(relevancia_bruto, aes(x = "", y = n, fill = `...45`)) +
+  geom_col(width = 1) +  
+  coord_polar("y") +
+  scale_fill_manual(values = cores) +
+  theme_void() +
+  labs(title = "Relevância dos rumores") +
+  theme(
+    plot.title = element_text(family = "Arial", face = "bold", colour = "#264653", hjust = 0.5),
+    legend.position = "none" 
+  ) +
+  geom_label(data = subset(relevancia_bruto, `...45` == "Não relevante"),
+             aes(label = paste(`...45`, n, sep = ": ")), position = position_stack(vjust = 0.8), color = "white", size = 3) +
+  geom_label(data = subset(relevancia_bruto, `...45` == "Relevante"),
+             aes(label = paste(`...45`, n, sep = ": ")), position = position_stack(vjust = 0.2), color = "white", size = 3)
+
+print(relevancia_g)
+
+
+##Gráfico CME 
+CME$label_pos <- cumsum(CME$n) - 0.5 * CME$n
+CME$label_text <- ifelse(CME$`...73` == "Sim", paste(CME$n[CME$`...73` == "Sim"], "- CME"), as.character(CME$n))
+
+cme_g <- ggplot(CME, aes(x = "", y = n, fill = `...73`)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar(theta = "y") +
+  labs(title = "Apresentado no CME") +
+  scale_fill_manual(values = cores) +
+  theme_void() +
+  theme(
+    axis.text.x = element_blank(),
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    legend.position = "none",
+     plot.title = element_text(family = "Arial", face = "bold", colour = "#264653", hjust = 0.5)
+  ) +
+  geom_label(aes(y = label_pos, label = label_text), color = "white", size = 3)
+
+print(cme_g)
+
+
+##mapa internacional
+mapa_final <- left_join(world_dados, rumores_por_pais, by = "País") 
+mapa_final$log_rumor_count <- log1p(mapa_final$rumor_count)
+
+mundo_mapa <- ggplot(mapa_final, aes(x = long, y = lat, group = group, fill = log_rumor_count)) +
+  geom_polygon(color = "black") +
+  scale_fill_gradient(low = "#b3cde0", high = "#264653", name = "Rumores") +
+  theme_void() +
+  coord_fixed(ratio = 1.2) +
+  labs(title = "Frequência por País") +
+  theme(
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(family = "Arial", face = "bold", colour = "#264653", hjust = 0.5),
+    axis.text = element_blank(),
+    axis.ticks = element_blank()
+  ) +
+  guides(fill = FALSE) 
+
+
+  ##mapa nacional
+
+dados_brasil$log_n <- log1p(dados_brasil$n)
+
+br_mapa <- ggplot() +
+  geom_sf(data=dados_brasil, aes(fill=log_n)) +
+  geom_polygon(color = "black") +
+  labs(title = "Frequência por Estado") +
+  scale_fill_gradient(low = "#b3cde0", high = "#264653", name = "Rumores") +
+  theme_void() +
+  theme(
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(family = "Arial", face = "bold", colour = "#264653", hjust = 0.5),
+    axis.text = element_blank(),
+    axis.ticks = element_blank()
+  ) +
+  guides(fill = FALSE)
+
+```
+
+```{r textos}
+## Textos doc 1 
+
+
+min_SE <- min(rumor$SE, na.rm = TRUE)
+max_SE <- max(rumor$SE, na.rm = TRUE)
+total_rumores <- nrow(rumor)
+rumores_n <- sum(rumor$Origem == "Nacional")  
+rumores_i <- total_rumores - rumores_n
+rumores_rel <- sum(rumor$`...45` == "Relevante")  
+rumores_nr <- total_rumores - rumores_rel
+ver <- verificado_s[2, 2]
+ver_final_v <- v_final_i[2, 2]
+ver_final_n <- v_final_i[1, 2]
+cme_n <- CME[2, 2]
+  
+
+textodoc1 <- sprintf("    Durante o período da semana epidemiológica %s até a semana %s, a equipe do CIEVS nacional identificou %s rumores, dos quais %s eram de origem nacional e %s internacional. Dessa totalidade, %s foram considerados relevantes e %s não relevantes. Entre os rumores relevantes, %s passaram por verificação em fontes oficiais. Após essa análise, %s foram confirmados como verídicos e %s como não verídicos. Dos rumores tanto relevantes quanto verídicos, %s foram discutidos no Comitê de Monitoramento de Eventos (CME).",
+                 min_SE, max_SE, total_rumores, rumores_n, rumores_i, rumores_rel, rumores_nr, ver, ver_final_v, ver_final_n, cme_n)
+
+
+
+##Texto doc2 
+
+top_UF <- estado %>%
+  arrange(-n)
+u1 <- top_UF[1,1]
+r1 <- top_UF[1, 2]
+u2 <- top_UF[2,1]
+r2 <- top_UF[2,2]
+u3 <- top_UF[4,1]
+r3 <- top_UF[4, 2]
+u4 <- top_UF[5, 1]
+r4 <- top_UF[5, 2]
+
+v_op <- v_oportuna[2,3]
+
+
+
+textodoc2 <- sprintf("    No âmbito nacional, foram detectados rumores em todos os estados do país. Os estados que mais se destacaram em termos de volume de rumores foram: %s, com um total de %s rumores; %s, com %s rumores; %s, registrando %s rumores e, por fim, %s, com %s rumores. É importante ressaltar que, de acordo com o estabelecido pelo Artigo 10 do Regulamento Sanitário Internacional, a verificação oportuna de tais rumores dentro da Rede CIEVS foi realizada em apenas %s das ocasiões.", 
+             u1, r1, u2, r2, u3, r3, u4, r4, v_op)
+
+
+##Texto doc 3
+
+top_p <- rumores_por_pais %>%
+arrange(-rumor_count)
+
+p1 <- top_p[2,1]
+rp1<- top_p[2,2]
+p2<- top_p[3,1]
+rp2<- top_p[3,2]
+p3<-top_p[5,1]
+rp3<- top_p[5,2]
+p4<-top_p[6,1]
+rp4<-top_p[6,2]
+
+top_assuntos_i 
+
+ai1<- top_assuntos_i[1,1]
+ai2<- top_assuntos_i[2,1]
+ai3<- top_assuntos_i[3,1]
+ai4<-top_assuntos_i[4,1]
+
+
+textodoc3 <- sprintf("    No cenário internacional, foram identificados rumores em diversos países ao redor do mundo. Os países que mais se destacaram em termos de volume de rumores foram: %s, com um total de %s rumores; %s, com %s rumores; %s, registrando %s rumores e, por fim, %s, com %s rumores. Os agravos, doenças e eventos mais presentes no âmbito internacional foram: %s, %s, %s e %s  ", 
+                     p1, rp1, p2, rp2, p3, rp3, p4, rp4, ai1, ai2, ai3, ai4)
+
+
+```
+
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r Capa}
+#capa
+doc <- read_pptx("D:/Relatorio/relatorio1.pptx")  %>% 
+  remove_slide(index = 1) %>%
+  add_slide(master='mestre', layout='Title slide') 
+
+
+
+
+
+```
+
+```{r Introduçao}
+
+text_format <- fp_text(color = "#333272", font.size = 24)
+
+doc1 <- doc %>%
+  add_slide(master='mestre', layout='Introduçao') %>%
+  ph_with(value = g_assunto, 
+          location = ph_location_label(ph_label = "Grafico agravos")) %>%
+  ph_with(value = cme_g, 
+          location = ph_location_label(ph_label = "CME")) %>%
+  ph_with(value = origem_g, 
+          location = ph_location_label(ph_label = "Rumores Nac-Inter")) %>%
+  ph_with(value = relevancia_g, 
+          location = ph_location_label(ph_label = "Relevancia")) %>%
+  ph_with(value = textodoc1, location = ph_location_label(ph_label = "Texto intro"), type = "body") %>%
+  ph_with(value = "Introdução", 
+          location = ph_location_label(ph_label = "Título 5"), type = "title", 
+          format = text_format)
+
+
+```
+
+```{r Rumores nacionais}
+doc2 <- doc1 %>%
+  add_slide(master='mestre', layout='Rumores nacionais') %>%
+  ph_with(value = br_mapa, 
+          location = ph_location_label(ph_label = "Mapa nacionais")) %>%
+    ph_with(value = g_assunto_n, 
+          location = ph_location_label(ph_label = "Grafico agravos")) %>%
+    ph_with(value = textodoc2, location = ph_location_label(ph_label = "Texto rum. nacionais"), type = "body") %>%
+  ph_with(value = "Rumores Nacionais", 
+               location = ph_location_label(ph_label = "Espaço Reservado para Texto 7"), type = "body")
+```
+
+```{r Rumores internacionais}
+doc3 <- doc2 %>%
+   add_slide(master='mestre', layout='Rumores internacionais') %>%
+  ph_with(value = mundo_mapa, 
+          location = ph_location_label(ph_label = "Mapa")) %>%
+  ph_with(value = g_assunto_i, 
+          location = ph_location_label(ph_label = "Lista agravos")) %>%
+  ph_with(value = textodoc3, location = ph_location_label(ph_label = "Intro internacionais"), type = "body") %>%
+  ph_with(value = "Rumores Internacionais", 
+               location = ph_location_label(ph_label = "Espaço Reservado para Texto 7"), type = "body")
+```
+
+```{r}
+doc4 <- doc3 %>%
+  add_slide(master='mestre', layout='fim') %>%
+    ph_with(value=fpar(ftext("EDITORIAL\n\n\nSecretária de Vigilância de Saúde e Ambiente\n",fp_text(bold=TRUE,font.size=14,color="#FFFFFF",font.family="Arial Black")),
+                     ftext("Ethel Leonor Noia Maciel\n\n",fp_text(bold=FALSE,font.size=14,color="#FFFFFF",font.family="Arial")),
+                     ftext("Diretor DEMSP\n",fp_text(bold=TRUE,font.size=14,color="#FFFFFF",font.family="Arial Black")),
+                     ftext("Márcio Henrique de Oliveira Garcia\n\n",fp_text(bold=FALSE,font.size=14,color="#FFFFFF",font.family="Arial")),
+                     ftext("Coordenador-Geral CIEVS\n",fp_text(bold=TRUE,font.size=14,color="#FFFFFF",font.family="Arial Black")),
+                     ftext("Daniel Roberto Coradi de Freitas\n\n",fp_text(bold=FALSE,font.size=14,color="#FFFFFF",font.family="Arial")),
+                     ftext("Coordenador CARESP\n",fp_text(bold=TRUE,font.size=14,color="#FFFFFF",font.family="Arial Black")),
+                     ftext("Otto Henrique Nienov\n\n",fp_text(bold=FALSE,font.size=14,color="#FFFFFF",font.family="Arial")),
+                     ftext("Líder da Equipe CIEVS Nacional\n",fp_text(bold=TRUE,font.size=14,color="#FFFFFF",font.family="Arial Black")),
+                     ftext("Ariadine Kelly Pereira Rodrigues Francisco\n\n",fp_text(bold=FALSE,font.size=14,color="#FFFFFF",font.family="Arial")),
+                     ftext("Equipe de Detecção\n",fp_text(bold=TRUE,font.size=14,color="#FFFFFF",font.family="Arial Black")),
+                     ftext("Álvaro Ítalo de Sousa Dias\nGabrielle Dias Wanzeller\nMarco Aurélio de Azevedo\nSacha Santos Saboia Diniz de Carvalho\n\n",fp_text(bold=FALSE,font.size=14,color="#FFFFFF",font.family="Arial")),
+                     ftext("Automatização do relatório semestral\n",fp_text(bold=TRUE,font.size=14,color="#FFFFFF",font.family="Arial Black")),
+                     ftext("Sacha Santos Saboia Diniz de Carvalho\n\n",fp_text(bold=FALSE,font.size=14,color="#FFFFFF",font.family="Arial")),
+                     ftext("Colaboração\n",fp_text(bold=TRUE,font.size=14,color="#FFFFFF",font.family="Arial Black")),
+                     ftext("Equipe CIEVS\n\n",fp_text(bold=FALSE,font.size=14,color="#FFFFFF",font.family="Arial")),
+                     fp_p=fp_par(text.align="center")),location=ph_location_label("Espaço Reservado para Texto 9"))
+```
+
+
+```{r}
+
+print(doc, target = "Trabalho_Final_Relatorio.pptx")
+```
